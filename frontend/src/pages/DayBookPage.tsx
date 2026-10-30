@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import api, { getApiErrorMessage } from '../api/client';
-import StatusToasts from '../components/StatusToasts';
-import ScopeBar, { Metric } from '../components/ScopeBar';
-import DateRangePresets from '../components/DateRangePresets';
-import LoadingState from '../components/LoadingState';
-import type { CompanyProfile, DayBook, DayBookEntry } from '../types/api';
-import formatCurrency, { formatDate } from '../utils/formatting';
-import { toIsoDate } from '../utils/dateRanges';
-import { buildDayBookParams, parseDayBookFilters, resolveVoucherType } from '../utils/dayBookFilters';
-import { useFY } from '../context/FYContext';
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import api, { getApiErrorMessage } from "../api/client";
+import StatusToasts from "../components/StatusToasts";
+import ScopeBar, { Metric } from "../components/ScopeBar";
+import DateRangePresets from "../components/DateRangePresets";
+import LoadingState from "../components/LoadingState";
+import type { CompanyProfile, DayBook, DayBookEntry } from "../types/api";
+import formatCurrency, { formatDate } from "../utils/formatting";
+import { toIsoDate } from "../utils/dateRanges";
+import {
+  buildDayBookParams,
+  parseDayBookFilters,
+  resolveVoucherType,
+} from "../utils/dayBookFilters";
+import { useFY } from "../context/FYContext";
 
 function defaultDateRange() {
   const today = new Date();
@@ -23,7 +27,10 @@ function defaultDateRange() {
 
 /** `sales` → `sales`, `credit note` → `credit-note`; the modifier suffix. */
 function tagModifier(voucherType: string) {
-  return voucherType.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  return voucherType
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-");
 }
 
 /** Vouchers arrive newest-first; a day book is read a day at a time, so the
@@ -53,42 +60,64 @@ export default function DayBookPage() {
   // refresh, a back navigation or a shared link keeps the view. The date
   // range keeps its own handling and is deliberately not a URL param here.
   const [searchParams, setSearchParams] = useSearchParams();
-  const { search, voucherType: requestedVoucherType } = parseDayBookFilters(searchParams);
+  const { search, voucherType: requestedVoucherType } =
+    parseDayBookFilters(searchParams);
   const [loading, setLoading] = useState(true);
-  const [downloading, setDownloading] = useState<'pdf' | 'csv' | null>(null);
-  const [error, setError] = useState('');
+  const [downloading, setDownloading] = useState<"pdf" | "csv" | null>(null);
+  const [error, setError] = useState("");
 
-  const activeCurrencyCode = company?.currency_code || 'USD';
+  const activeCurrencyCode = company?.currency_code || "USD";
 
-  async function loadDayBook() {
-    try {
-      setLoading(true);
-      setError('');
+  useEffect(() => {
+    let cancelled = false;
 
-      const [dayBookResponse, companyResponse] = await Promise.all([
-        api.get<DayBook>('/ledgers/day-book', {
+    (async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await api.get("/ledgers/day-book", {
           params: {
             from_date: period.fromDate,
             to_date: period.toDate,
           },
-        }),
-        api.get<CompanyProfile>('/company/'),
-      ]);
+        });
 
-      setDayBook(dayBookResponse.data);
-      setCompany(companyResponse.data);
-    } catch (err) {
-      setDayBook(null);
-      setError(getApiErrorMessage(err, 'Unable to load day book'));
-    } finally {
-      setLoading(false);
-    }
-  }
+        if (cancelled) return;
+        setDayBook(response.data);
+      } catch (err) {
+        if (cancelled) return;
+        setDayBook(null);
+        setError(getApiErrorMessage(err, "Unable to load day book"));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
 
-  useEffect(() => {
-    void loadDayBook();
+    return () => {
+      cancelled = true;
+    };
   }, [period.fromDate, period.toDate]);
 
+  // Company settings don't change with the period, so /company/ loads once
+  // on mount instead of riding along with every day book fetch.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await api.get("/company/");
+        if (!cancelled) setCompany(response.data);
+      } catch (err) {
+        if (!cancelled)
+          setError(getApiErrorMessage(err, "Unable to load company"));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Re-initialise date range when active FY changes
   useEffect(() => {
     setPeriod({
@@ -104,7 +133,12 @@ export default function DayBookPage() {
   // The voucher kinds actually present, so the filter never offers a choice
   // that empties the register.
   const voucherTypes = useMemo(
-    () => [...new Set(allEntries.map((entry) => entry.voucher_type).filter(Boolean))].sort(),
+    () =>
+      [
+        ...new Set(
+          allEntries.map((entry) => entry.voucher_type).filter(Boolean),
+        ),
+      ].sort(),
     [allEntries],
   );
 
@@ -116,7 +150,10 @@ export default function DayBookPage() {
 
   // Replace, never push: typing must not stack a history entry per keystroke,
   // and a filter change should not trap Back behind every nudge either.
-  function updateDayBookFilters(patch: { search?: string; voucherType?: string }) {
+  function updateDayBookFilters(patch: {
+    search?: string;
+    voucherType?: string;
+  }) {
     setSearchParams(
       buildDayBookParams({ search, voucherType, ...patch }, searchParams),
       { replace: true },
@@ -126,13 +163,24 @@ export default function DayBookPage() {
   // Once the entries are known, drop an unknown `type` from the URL so the
   // link itself becomes the view the page actually shows.
   useEffect(() => {
-    if (dayBook && requestedVoucherType !== 'all' && !voucherTypes.includes(requestedVoucherType)) {
+    if (
+      dayBook &&
+      requestedVoucherType !== "all" &&
+      !voucherTypes.includes(requestedVoucherType)
+    ) {
       setSearchParams(
-        buildDayBookParams({ search, voucherType: 'all' }, searchParams),
+        buildDayBookParams({ search, voucherType: "all" }, searchParams),
         { replace: true },
       );
     }
-  }, [dayBook, requestedVoucherType, voucherTypes, search, searchParams, setSearchParams]);
+  }, [
+    dayBook,
+    requestedVoucherType,
+    voucherTypes,
+    search,
+    searchParams,
+    setSearchParams,
+  ]);
 
   // Narrowing the loaded period is a scan of at most a few thousand rows, and
   // doing it here rather than server-side keeps it instant as you type.
@@ -140,10 +188,15 @@ export default function DayBookPage() {
     const needle = search.trim().toLowerCase();
 
     return allEntries.filter((entry) => {
-      if (voucherType !== 'all' && entry.voucher_type !== voucherType) return false;
+      if (voucherType !== "all" && entry.voucher_type !== voucherType)
+        return false;
       if (!needle) return true;
-      return [entry.reference_number, entry.ledger_name, entry.particulars, entry.voucher_type]
-        .some((field) => field?.toLowerCase().includes(needle));
+      return [
+        entry.reference_number,
+        entry.ledger_name,
+        entry.particulars,
+        entry.voucher_type,
+      ].some((field) => field?.toLowerCase().includes(needle));
     });
   }, [allEntries, search, voucherType]);
 
@@ -153,36 +206,45 @@ export default function DayBookPage() {
   // totals, so a filtered view never quietly restates a different number as
   // "the period".
   const visibleTotals = useMemo(
-    () => entries.reduce(
-      (acc, entry) => ({ debit: acc.debit + entry.debit, credit: acc.credit + entry.credit }),
-      { debit: 0, credit: 0 },
-    ),
+    () =>
+      entries.reduce(
+        (acc, entry) => ({
+          debit: acc.debit + entry.debit,
+          credit: acc.credit + entry.credit,
+        }),
+        { debit: 0, credit: 0 },
+      ),
     [entries],
   );
 
   const days = useMemo(() => groupByDay(entries), [entries]);
 
-  async function handleDownload(format: 'pdf' | 'csv') {
+  async function handleDownload(format: "pdf" | "csv") {
     try {
       setDownloading(format);
-      setError('');
+      setError("");
 
       const response = await api.get(`/ledgers/day-book/${format}`, {
         params: {
           from_date: period.fromDate,
           to_date: period.toDate,
         },
-        responseType: 'blob',
+        responseType: "blob",
       });
 
       const url = window.URL.createObjectURL(response.data as Blob);
-      const link = document.createElement('a');
+      const link = document.createElement("a");
       link.href = url;
       link.download = `day_book_${period.fromDate}_${period.toDate}.${format}`;
       link.click();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      setError(getApiErrorMessage(err, `Unable to download day book ${format.toUpperCase()}`));
+      setError(
+        getApiErrorMessage(
+          err,
+          `Unable to download day book ${format.toUpperCase()}`,
+        ),
+      );
     } finally {
       setDownloading(null);
     }
@@ -194,49 +256,69 @@ export default function DayBookPage() {
         <div>
           <p className="eyebrow">Accounting</p>
           <h1 className="page-title">Day book</h1>
-          <p className="section-copy">A minimal Tally-style voucher register for the selected period.</p>
+          <p className="section-copy">
+            A minimal Tally-style voucher register for the selected period.
+          </p>
         </div>
         <div className="status-chip">
-          {filtered ? `${entries.length} of ${allEntries.length} vouchers` : `${allEntries.length} vouchers`}
+          {filtered
+            ? `${entries.length} of ${allEntries.length} vouchers`
+            : `${allEntries.length} vouchers`}
         </div>
       </section>
 
-      <StatusToasts error={error} onClearError={() => setError('')} onClearSuccess={() => {}} />
+      <StatusToasts
+        error={error}
+        onClearError={() => setError("")}
+        onClearSuccess={() => {}}
+      />
 
       <ScopeBar
-        presets={(
-          <DateRangePresets
-            value={period}
-            onChange={setPeriod}
-            fy={activeFY}
-          />
-        )}
-        metrics={(
+        presets={
+          <DateRangePresets value={period} onChange={setPeriod} fy={activeFY} />
+        }
+        metrics={
           <>
-            <Metric label="Period debit" value={formatCurrency(dayBook?.total_debit ?? 0, activeCurrencyCode)} />
-            <Metric label="Period credit" value={formatCurrency(dayBook?.total_credit ?? 0, activeCurrencyCode)} />
+            <Metric
+              label="Period debit"
+              value={formatCurrency(
+                dayBook?.total_debit ?? 0,
+                activeCurrencyCode,
+              )}
+            />
+            <Metric
+              label="Period credit"
+              value={formatCurrency(
+                dayBook?.total_credit ?? 0,
+                activeCurrencyCode,
+              )}
+            />
           </>
-        )}
-        actions={(
+        }
+        actions={
           <>
             <button
               type="button"
               className="button button--primary button--small"
-              onClick={() => { void handleDownload('pdf'); }}
+              onClick={() => {
+                void handleDownload("pdf");
+              }}
               disabled={downloading !== null}
             >
-              {downloading === 'pdf' ? 'Downloading…' : 'Export PDF'}
+              {downloading === "pdf" ? "Downloading…" : "Export PDF"}
             </button>
             <button
               type="button"
               className="button button--secondary button--small"
-              onClick={() => { void handleDownload('csv'); }}
+              onClick={() => {
+                void handleDownload("csv");
+              }}
               disabled={downloading !== null}
             >
-              {downloading === 'csv' ? 'Downloading…' : 'Export CSV'}
+              {downloading === "csv" ? "Downloading…" : "Export CSV"}
             </button>
           </>
-        )}
+        }
       >
         <div className="field">
           <label htmlFor="day-book-from">From</label>
@@ -245,7 +327,12 @@ export default function DayBookPage() {
             className="input"
             type="date"
             value={period.fromDate}
-            onChange={(event) => setPeriod((current) => ({ ...current, fromDate: event.target.value }))}
+            onChange={(event) =>
+              setPeriod((current) => ({
+                ...current,
+                fromDate: event.target.value,
+              }))
+            }
           />
         </div>
         <div className="field">
@@ -255,7 +342,12 @@ export default function DayBookPage() {
             className="input"
             type="date"
             value={period.toDate}
-            onChange={(event) => setPeriod((current) => ({ ...current, toDate: event.target.value }))}
+            onChange={(event) =>
+              setPeriod((current) => ({
+                ...current,
+                toDate: event.target.value,
+              }))
+            }
           />
         </div>
         <div className="field">
@@ -264,11 +356,15 @@ export default function DayBookPage() {
             id="day-book-voucher-type"
             className="select"
             value={voucherType}
-            onChange={(event) => updateDayBookFilters({ voucherType: event.target.value })}
+            onChange={(event) =>
+              updateDayBookFilters({ voucherType: event.target.value })
+            }
           >
             <option value="all">All types</option>
             {voucherTypes.map((type) => (
-              <option key={type} value={type}>{type}</option>
+              <option key={type} value={type}>
+                {type}
+              </option>
             ))}
           </select>
         </div>
@@ -280,7 +376,9 @@ export default function DayBookPage() {
             type="search"
             placeholder="Reference, ledger or particulars"
             value={search}
-            onChange={(event) => updateDayBookFilters({ search: event.target.value })}
+            onChange={(event) =>
+              updateDayBookFilters({ search: event.target.value })
+            }
           />
         </div>
       </ScopeBar>
@@ -293,7 +391,13 @@ export default function DayBookPage() {
               <h2 className="nav-panel__title">Voucher register</h2>
             </div>
             {filtered ? (
-              <button type="button" className="button button--ghost button--small" onClick={() => updateDayBookFilters({ search: '', voucherType: 'all' })}>
+              <button
+                type="button"
+                className="button button--ghost button--small"
+                onClick={() =>
+                  updateDayBookFilters({ search: "", voucherType: "all" })
+                }
+              >
                 Clear filters
               </button>
             ) : null}
@@ -304,8 +408,8 @@ export default function DayBookPage() {
           {!loading && entries.length === 0 ? (
             <div className="empty-state">
               {allEntries.length === 0
-                ? 'No vouchers found for this period.'
-                : 'No vouchers match these filters.'}
+                ? "No vouchers found for this period."
+                : "No vouchers match these filters."}
             </div>
           ) : null}
 
@@ -326,32 +430,50 @@ export default function DayBookPage() {
                     <div className="register__day">
                       <span>{formatDate(day.date)}</span>
                       <span className="register__day-count">
-                        {day.entries.length} {day.entries.length === 1 ? 'voucher' : 'vouchers'}
+                        {day.entries.length}{" "}
+                        {day.entries.length === 1 ? "voucher" : "vouchers"}
                       </span>
                     </div>
 
                     {day.entries.map((entry, idx) => (
-                      <div key={`${entry.entry_type}-${entry.entry_id}-${idx}`} className="register__row">
-                        <span className="register__date">{formatDate(entry.date)}</span>
+                      <div
+                        key={`${entry.entry_type}-${entry.entry_id}-${idx}`}
+                        className="register__row"
+                      >
+                        <span className="register__date">
+                          {formatDate(entry.date)}
+                        </span>
                         <span className="register__cell register__voucher">
-                          <span className={`register__tag register__tag--${tagModifier(entry.voucher_type)}`}>
+                          <span
+                            className={`register__tag register__tag--${tagModifier(entry.voucher_type)}`}
+                          >
                             {entry.voucher_type}
                           </span>
                           {entry.reference_number ? (
-                            <span className="register__ref">{entry.reference_number}</span>
+                            <span className="register__ref">
+                              {entry.reference_number}
+                            </span>
                           ) : null}
                         </span>
-                        <span className="register__cell">{entry.ledger_name}</span>
-                        <span className="register__cell table-subtext">{entry.particulars}</span>
+                        <span className="register__cell">
+                          {entry.ledger_name}
+                        </span>
+                        <span className="register__cell table-subtext">
+                          {entry.particulars}
+                        </span>
                         <span className="register__num register__debit">
-                          {entry.debit > 0
-                            ? formatCurrency(entry.debit, activeCurrencyCode)
-                            : <span className="register__nil">—</span>}
+                          {entry.debit > 0 ? (
+                            formatCurrency(entry.debit, activeCurrencyCode)
+                          ) : (
+                            <span className="register__nil">—</span>
+                          )}
                         </span>
                         <span className="register__num register__credit">
-                          {entry.credit > 0
-                            ? formatCurrency(entry.credit, activeCurrencyCode)
-                            : <span className="register__nil">—</span>}
+                          {entry.credit > 0 ? (
+                            formatCurrency(entry.credit, activeCurrencyCode)
+                          ) : (
+                            <span className="register__nil">—</span>
+                          )}
                         </span>
                       </div>
                     ))}
@@ -364,7 +486,7 @@ export default function DayBookPage() {
                   <span className="register__date" />
                   <span />
                   <span />
-                  <span>{filtered ? 'Filtered total' : 'Period total'}</span>
+                  <span>{filtered ? "Filtered total" : "Period total"}</span>
                   <span className="register__num register__debit">
                     {formatCurrency(visibleTotals.debit, activeCurrencyCode)}
                   </span>
